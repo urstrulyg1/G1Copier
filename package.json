@@ -1,0 +1,143 @@
+{
+  "name": "g1copier",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A high-speed, consent-first desktop file copying, synchronization, and backup platform",
+  "author": "urstrulyg1 <support@urstrulyg1.dev>",
+  "license": "MIT",
+  "main": "out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "tsc --noEmit && electron-vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "icons": "node scripts/generate-icons.mjs",
+    "package:dir": "npm run build && electron-builder --dir",
+    "dist": "npm run build && electron-builder --publish never",
+    "dist:mac": "npm run build && electron-builder --mac --publish never",
+    "dist:mac:x64": "npm run build && electron-builder --mac dmg --x64 --publish never",
+    "dist:mac:arm64": "npm run build && electron-builder --mac dmg --arm64 --publish never",
+    "dist:win": "npm run build && electron-builder --win --publish never",
+    "dist:win:x64": "npm run build && electron-builder --win nsis --x64 --publish never",
+    "dist:win:arm64": "npm run build && electron-builder --win nsis --arm64 --publish never",
+    "dist:linux": "npm run build && electron-builder --linux --publish never",
+    "dist:linux:deb": "npm run build && electron-builder --linux deb --x64 --publish never",
+    "dist:linux:appimage": "npm run build && electron-builder --linux AppImage --x64 --publish never",
+    "validate:assets": "node scripts/validate-release-assets.mjs"
+  },
+  "dependencies": {
+    "@noble/hashes": "^1.8.0",
+    "lucide-react": "^0.468.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@testing-library/react": "^16.3.3",
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^44.7.2",
+    "electron-builder": "26.17.0",
+    "electron-vite": "^3.0.0",
+    "jsdom": "^26.1.0",
+    "puppeteer-core": "25.14.0",
+    "typescript": "^5.7.2",
+    "vitest": "^5.0.4"
+  },
+  "overrides": {
+    "@electron/get": "^5.1.0"
+  },
+  "build": {
+    "appId": "com.urstrulyg1.g1copier",
+    "productName": "G1Copier",
+    "copyright": "Copyright © 2025-2026 urstrulyg1",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "out/**/*"
+    ],
+    "mac": {
+      "icon": "build/icon.icns",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "artifactName": "${name}_${arch}.${ext}"
+    },
+    "dmg": {
+      "title": "${productName} Installer",
+      "icon": "build/icon.icns",
+      "background": "build/background.tiff",
+      "writeUpdateInfo": false,
+      "contents": [
+        {
+          "x": 170,
+          "y": 250
+        },
+        {
+          "x": 510,
+          "y": 250,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ],
+      "window": {
+        "width": 680,
+        "height": 450
+      }
+    },
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "artifactName": "${name}_${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "differentialPackage": false,
+      "allowToChangeInstallationDirectory": true,
+      "deleteAppDataOnUninstall": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "G1Copier",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerHeader": "build/installerHeader.bmp",
+      "installerSidebar": "build/installerSidebar.bmp",
+      "uninstallerSidebar": "build/uninstallerSidebar.bmp"
+    },
+    "linux": {
+      "icon": "build/icons",
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "artifactName": "${name}_x64.${ext}",
+      "category": "Utility",
+      "synopsis": "High-speed file copying and verification platform",
+      "maintainer": "urstrulyg1 <support@urstrulyg1.dev>"
+    },
+    "appImage": {
+      "artifactName": "${name}_x64.${ext}"
+    },
+    "deb": {
+      "artifactName": "${name}_x64.${ext}"
+    }
+  }
+}

@@ -1,0 +1,211 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Tag name for the release (e.g. v0.1.0)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    name: Verify tests, typecheck, and build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Unit tests
+        run: npm test
+      - name: Build bundles
+        run: npm run build
+
+  build-packages:
+    name: Build ${{ matrix.name }}
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: windows-x64
+            name: Windows x64 (.exe)
+            os: windows-latest
+            build_cmd: npm run dist:win:x64
+            file: release/g1copier_x64.exe
+            filename: g1copier_x64.exe
+          - id: windows-arm64
+            name: Windows ARM64 (.exe)
+            os: windows-latest
+            build_cmd: npm run dist:win:arm64
+            file: release/g1copier_arm64.exe
+            filename: g1copier_arm64.exe
+          - id: macos-x64
+            name: macOS Intel x64 (.dmg)
+            os: macos-latest
+            build_cmd: npm run dist:mac:x64
+            file: release/g1copier_x64.dmg
+            filename: g1copier_x64.dmg
+          - id: macos-arm64
+            name: macOS Apple Silicon ARM64 (.dmg)
+            os: macos-latest
+            build_cmd: npm run dist:mac:arm64
+            file: release/g1copier_arm64.dmg
+            filename: g1copier_arm64.dmg
+          - id: linux-x64-deb
+            name: Linux x64 Debian (.deb)
+            os: ubuntu-latest
+            build_cmd: npm run dist:linux:deb
+            file: release/g1copier_x64.deb
+            filename: g1copier_x64.deb
+          - id: linux-x64-appimage
+            name: Linux x64 AppImage (.AppImage)
+            os: ubuntu-latest
+            build_cmd: npm run dist:linux:appimage
+            file: release/g1copier_x64.AppImage
+            filename: g1copier_x64.AppImage
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Generate branding icons and packaging assets
+        run: npm run icons
+      - name: Build ${{ matrix.name }}
+        run: ${{ matrix.build_cmd }}
+      - name: Normalize filename and clean build side-effects
+        shell: bash
+        run: |
+          rm -f release/*.blockmap* release/*.yml* release/*.yaml*
+          if [ -f release/g1copier_x86_64.AppImage ]; then
+            mv release/g1copier_x86_64.AppImage release/g1copier_x64.AppImage
+          fi
+          if [ -f release/g1copier_amd64.deb ]; then
+            mv release/g1copier_amd64.deb release/g1copier_x64.deb
+          fi
+          echo "=== Deliverables in release/ ==="
+          ls -la release/
+      - name: Validate deliverable format and integrity
+        run: node scripts/validate-release-assets.mjs --target ${{ matrix.id }} --dir release
+      - name: Upload standalone ${{ matrix.filename }} artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.filename }}
+          path: ${{ matrix.file }}
+          archive: false
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish GitHub Release with Changelog
+    needs: build-packages
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies for release validation
+        run: npm ci
+
+      - name: Create release assets directory
+        run: mkdir -p release-assets
+
+      - name: Download all platform artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: g1copier_*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Clean up temporary metadata and verify standalone deliverables
+        run: |
+          rm -f release-assets/*.blockmap* release-assets/*.yml* release-assets/*.yaml*
+          if [ -f release-assets/g1copier_x86_64.AppImage ]; then
+            mv release-assets/g1copier_x86_64.AppImage release-assets/g1copier_x64.AppImage
+          fi
+          if [ -f release-assets/g1copier_amd64.deb ]; then
+            mv release-assets/g1copier_amd64.deb release-assets/g1copier_x64.deb
+          fi
+          echo "=== Standalone distribution binaries to be published uncompressed ==="
+          ls -la release-assets/
+          node scripts/validate-release-assets.mjs --all release-assets/
+
+      - name: Determine Release Tag
+        id: release_tag
+        run: |
+          if [ -n "${{ github.event.inputs.tag_name }}" ]; then
+            TAG="${{ github.event.inputs.tag_name }}"
+          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+          else
+            TAG="v$(node -p "require('./package.json').version")"
+          fi
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Create or Update GitHub Release with Standalone Assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.release_tag.outputs.tag }}
+        run: |
+          echo "Publishing GitHub Release for tag: $TAG"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists, cleaning up obsolete/blockmap assets..."
+            for asset in $(gh release view "$TAG" --json assets --jq '.assets[].name'); do
+              case "$asset" in
+                g1copier_x64.exe|g1copier_arm64.exe|g1copier_arm64.dmg|g1copier_x64.dmg|g1copier_x64.AppImage|g1copier_x64.deb|SHA256SUMS.txt)
+                  ;;
+                *)
+                  echo "Deleting obsolete asset from release: $asset"
+                  gh release delete-asset "$TAG" "$asset" -y || true
+                  ;;
+              esac
+            done
+            echo "Uploading standalone uncompressed assets to $TAG..."
+            gh release upload "$TAG" release-assets/* --clobber
+          else
+            echo "Creating new release $TAG with automated release notes and standalone assets..."
+            gh release create "$TAG" release-assets/* \
+              --title "G1Copier $TAG" \
+              --generate-notes
+          fi
+
+      - name: Generate download summary for GitHub Actions
+        run: |
+          echo "## 🚀 Direct Download Links (Uncompressed Installers)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "> [!IMPORTANT]" >> $GITHUB_STEP_SUMMARY
+          echo "> **Do NOT download from the Actions \"Artifacts\" table below.** GitHub's web interface packages all artifact downloads into \`.zip\` archives." >> $GITHUB_STEP_SUMMARY
+          echo "> To download the **direct native application/installer without any \`.zip\` extraction**, click the official direct links below:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Platform | Architecture | Installer Format | Direct 1-Click Download |" >> $GITHUB_STEP_SUMMARY
+          echo "| :--- | :--- | :--- | :--- |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Windows** | 64-bit (\`x64\`) | NSIS Setup (\`.exe\`) | [**g1copier_x64.exe**](https://github.com/urstrulyg1/G1Copier/releases/latest/download/g1copier_x64.exe) |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Windows** | ARM64 | NSIS Setup (\`.exe\`) | [**g1copier_arm64.exe**](https://github.com/urstrulyg1/G1Copier/releases/latest/download/g1copier_arm64.exe) |" >> $GITHUB_STEP_SUMMARY
+          echo "| **macOS** | Apple Silicon (\`arm64\`) | Disk Image (\`.dmg\`) | [**g1copier_arm64.dmg**](https://github.com/urstrulyg1/G1Copier/releases/latest/download/g1copier_arm64.dmg) |" >> $GITHUB_STEP_SUMMARY
+          echo "| **macOS** | Intel (\`x64\`) | Disk Image (\`.dmg\`) | [**g1copier_x64.dmg**](https://github.com/urstrulyg1/G1Copier/releases/latest/download/g1copier_x64.dmg) |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Linux** | 64-bit (\`x64\`) | Standalone AppImage (\`.AppImage\`) | [**g1copier_x64.AppImage**](https://github.com/urstrulyg1/G1Copier/releases/latest/download/g1copier_x64.AppImage) |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Linux** | 64-bit (\`x64\`) | Debian / Ubuntu (\`.deb\`) | [**g1copier_x64.deb**](https://github.com/urstrulyg1/G1Copier/releases/latest/download/g1copier_x64.deb) |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Checksums: [**SHA256SUMS.txt**](https://github.com/urstrulyg1/G1Copier/releases/latest/download/SHA256SUMS.txt)" >> $GITHUB_STEP_SUMMARY
